@@ -1,5 +1,6 @@
 // dllmain.cpp : Defines the entry point for the DLL application.
 #include "pch.h"
+#include "misc_utils.hpp"
 #include <Windows.h>
 #include <MinHook.h>
 #include <string>
@@ -42,6 +43,65 @@ BOOL WINAPI rCreateProcessW(LPCWSTR lpApplicationName, LPWSTR lpCommandLine, LPS
     return status;
 }
 
+bool inject_image(const wchar_t* window_class_name, const wchar_t* image_short_name)
+{
+    printf("[~] entering %s\n", __FUNCTION__);
+
+    printf("[~] waiting for game to open...\n");
+
+    const auto game_window = impl::wait_on_object([window_class_name]() { return FindWindowW(window_class_name, nullptr); });
+
+    if (!game_window)
+    {
+        printf("[!] timed out\n");
+        return false;
+    }
+
+    const auto window_thread = GetWindowThreadProcessId(game_window, nullptr);
+
+    if (!window_thread)
+    {
+        printf("GetWindowThreadProcessId fail\n");
+        return false;
+    }
+
+    printf("[~] window thread found [0x%lx]\n", window_thread);
+
+    // since w10 1607, the limit for maximum path isn't actually MAX_PATH, just assume it is.
+    auto dll_path = std::make_unique<wchar_t[]>(MAX_PATH);
+    GetFullPathNameW(image_short_name, MAX_PATH, dll_path.get(), nullptr);
+
+    const auto loaded_module = LoadLibraryW(dll_path.get());
+
+    if (!loaded_module)
+    {
+        printf("LoadLibraryW fail\n");
+        return false;
+    }
+
+    printf("[~] loaded module to local process [0x%p]\n", loaded_module);
+
+    const auto window_hook = GetProcAddress(loaded_module, "wnd_hk");
+
+    if (!window_hook)
+    {
+        printf("[!] can't find needed export in implanted dll, last error: 0x%lx", GetLastError());
+        return false;
+    }
+
+    printf("[~] posting message...\n");
+
+    // spam the fuck out of the message handler
+    for (auto i = 0; i < 50; i++)
+        PostThreadMessageW(window_thread, 0x5b0, 0, 0);
+
+    printf("[~] dll implanted\n");
+
+    printf("[~] leaving %s\n", __FUNCTION__);
+
+    return true;
+}
+
 wchar_t dllPath[] = TEXT("C:\\rust_sdk.dll");
 
 DWORD WINAPI mainthread(LPVOID) {
@@ -54,34 +114,8 @@ DWORD WINAPI mainthread(LPVOID) {
 
     printf("Found game in mainthread\n");
     
-    long GameBase = NULL;
-        
-    LPVOID addr = (LPVOID)GetProcAddress(GetModuleHandle(L"kernel32.dll"), "LoadLibraryA");
-    if (addr == NULL) {
-        printf("Error: the LoadLibraryA function was not found inside kernel32.dll library.\n");
-    }
-    LPVOID arg = (LPVOID)VirtualAllocEx(hGAME, NULL, sizeof(dllPath), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if (arg == NULL) {
-        printf("Error: the memory could not be allocated inside the chosen process.\n");
-    }
-    /*
-    * Write the argument to LoadLibraryA to the process's newly allocated memory region.
-    */
-    int n = WriteProcessMemory(hGAME, arg, dllPath, sizeof(dllPath), NULL);
-    if (n == 0) {
-        printf("Error: there was no bytes written to the process's address space.\n");
-    }
-    /*
-    * Inject our DLL into the process's address space.
-    */
-    HANDLE threadID = CreateRemoteThread(hGAME, NULL, 0, (LPTHREAD_START_ROUTINE)addr, arg, NULL, NULL);
-    if (threadID == NULL) {
-        printf("Error: the remote thread could not be created.\n");
-    }
-    else {
-        printf("Success: the remote thread was successfully created.\n");
-    }
-        
+    inject_image(L"UnityWndClass", L"C:\\rust_sdk.dll");
+
     printf("Done press enter\n");
     getchar();
 
