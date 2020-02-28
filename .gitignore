@@ -30,3 +30,8 @@
 *.exe
 *.out
 *.app
+
+EAC/Debug
+EAC/Release
+Release/
+Debug/
